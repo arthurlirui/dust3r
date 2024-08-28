@@ -14,6 +14,9 @@ import torch
 import json
 import numpy as np
 from pyquaternion import Quaternion
+from matplotlib import pyplot as pl
+from pprint import pprint
+from dust3r.demo import get_reconstructed_scene, get_3D_model_from_scene
 
 
 def split_img(img_path):
@@ -21,6 +24,17 @@ def split_img(img_path):
     img0 = img[:, :1920, :]
     img1 = img[:, 1920:, :]
     return img0, img1
+
+
+def resize_image():
+    filepath = 'D:\\Data\\ob\\0607\\test\\rgb'
+    outpath = 'D:\\Data\\ob\\0607\\test\\rgb3'
+    filelist = os.listdir(filepath)
+    for f in filelist:
+        img = cv2.imread(os.path.join(filepath, f), cv2.IMREAD_UNCHANGED)
+        h, w, d = img.shape
+        imgd = cv2.resize(img, (w//3, h//3))
+        cv2.imwrite(os.path.join(outpath, f), imgd)
 
 
 def render_depth():
@@ -75,7 +89,8 @@ def load_camera_files(json_path):
             res[key]['intrinsic'] = np.array(res[key]['intrinsic'])
             res[key]['extrinsic'] = np.array(res[key]['extrinsic'])
             q = Quaternion(matrix=res[key]['extrinsic'])
-            res[key]['Q'] = np.array([q[0], q[1], q[2], q[3]])
+            t = res[key]['extrinsic'][:3, 3]
+            res[key]['Q'] = np.array([q[0], q[1], q[2], q[3], t[0], t[1], t[2]])
             #res[key]['rvec'] = np.array(res[key]['rvec'])
             #res[key]['tvec'] = np.array(res[key]['tvec'])
     return res
@@ -94,7 +109,8 @@ def main_run():
     model = AsymmetricCroCo3DStereo.from_pretrained(model_name).to(device)
     # load_images can take a list of images or a directory
     #img_path = 'D:\\Data\\ob\\0607\\test\\rgb'
-    img_path = 'D:\\Data\\ob\\0607\\test\\rgb'
+    img_path = 'D:\\Data\\ob\\0607\\test\\rgb3'
+    output_path = 'D:\\Data\\ob\\0607\\test\\tmp'
     img_list = os.listdir(img_path)
     # img_list = ['IMG_0007.jpg', 'IMG_0008.jpg', 'IMG_0009.jpg', 'IMG_0010.jpg']
     # img_list = ['IMG_0011.jpg', 'IMG_0012.jpg', 'IMG_0013.jpg', 'IMG_0014.jpg']
@@ -102,13 +118,31 @@ def main_run():
     images = load_images(img_full_list, size=640, verbose=True, dual_camera=False)
     pairs = make_pairs(images, scene_graph='complete', prefilter=None, symmetrize=True)
     output = inference(pairs, model, device, batch_size=batch_size)
-
-    json_path = 'D:\\Data\\ob\\0607\\test'
+    #cv2.imwrite(output_path, np.array(output['pred1'].cpu()))
+    #cv2.imwrite(output_path, np.array(output['pred2'].cpu()))
+    json_path = 'D:\\Data\\ob\\0607\\test\\rgb3_output'
     cameras = load_camera_files(json_path=os.path.join(json_path, 'camera_info.json'))
-    keys = [os.path.basename(f).split('_')[0] for f in img_full_list]
+
+    known_poses = []
+    known_focals = []
+    for i in range(len(images)):
+        idx = images[i]['idx']
+        camera_id = os.path.basename(img_full_list[idx]).split('_')[0]
+        c2w = np.linalg.inv(cameras[camera_id]['extrinsic'])
+        #c2w[:3, 3] = c2w[:3, 3] / 3000
+        #c2w[:3, 3] = np.random.randn(1, 3)
+        known_poses.append(c2w)
+        #known_poses.append(np.linalg.inv(cameras[camera_id]['extrinsic']))
+        fx = cameras[camera_id]['intrinsic'][0, 0]
+        fy = cameras[camera_id]['intrinsic'][1, 1]
+        #known_focals.append(torch.tensor([np.random.randn(1)]))
+        known_focals.append(torch.tensor([0.5*(fx+fy)]))
+
+    #keys = [os.path.basename(f).split('_')[0] for f in img_full_list]
 
     # QW QX QY QZ X Y Z
-    known_poses = [cameras[key]['Q'] for key in keys]
+    #known_poses = [np.linalg.inv(cameras[key]['extrinsic']) for key in keys]
+    #known_poses = np.stack(known_poses, axis=0)
 
     # at this stage, you have the raw dust3r predictions
     view1, pred1 = output['view1'], output['pred1']
@@ -129,9 +163,13 @@ def main_run():
     # with only two input images, you could use GlobalAlignerMode.PairViewer: it would just convert the output
     # if using GlobalAlignerMode.PairViewer, no need to run compute_global_alignment
     scene = global_aligner(output, device=device, mode=GlobalAlignerMode.PointCloudOptimizer)
-    scene.preset_pose(known_poses=None)
-    loss = scene.compute_global_alignment(init="mst", niter=niter, schedule=schedule, lr=lr)
-    #loss = scene.compute_global_alignment(init="known_poses", niter=niter, schedule=schedule, lr=lr)
+    if False:
+        scene.preset_pose(known_poses=known_poses)
+        scene.preset_focal(known_focals=known_focals)
+        loss = scene.compute_global_alignment(init="known_poses", niter=niter, schedule=schedule, lr=lr)
+    else:
+        loss = scene.compute_global_alignment(init="mst", niter=niter, schedule=schedule, lr=lr)
+
 
     # retrieve useful values from scene:
     imgs = scene.imgs
@@ -142,6 +180,9 @@ def main_run():
 
     # visualize reconstruction
     scene.show()
+
+    #get_3D_model_from_scene(='./tmp', silent, scene, min_conf_thr=3, as_pointcloud=True, mask_sky=False,
+    #                        clean_depth=False, transparent_cams=False, cam_size=0.05)
 
     # find 2D-2D matches between the two images
     from dust3r.utils.geometry import find_reciprocal_matches, xy_grid
@@ -156,8 +197,7 @@ def main_run():
     matches_im0 = pts2d_list[0][nn2_in_P1][reciprocal_in_P2]
 
     # visualize a few matches
-    import numpy as np
-    from matplotlib import pyplot as pl
+
     n_viz = 10
     match_idx_to_viz = np.round(np.linspace(0, num_matches - 1, n_viz)).astype(int)
     viz_matches_im0, viz_matches_im1 = matches_im0[match_idx_to_viz], matches_im1[match_idx_to_viz]
@@ -183,8 +223,26 @@ if __name__ == '__main__':
         from pprint import pprint
         pprint(res)
 
+    if False:
+        json_path = 'D:\\Data\\ob\\0607\\test'
+
+        img_path = 'D:\\Data\\ob\\0607\\test\\rgb'
+        img_list = os.listdir(img_path)
+        img_full_list = sorted([os.path.join(img_path, f) for f in img_list])
+
+        cameras = load_camera_files(json_path=os.path.join(json_path, 'camera_info.json'))
+        keys = [os.path.basename(f).split('_')[0] for f in img_full_list]
+
+        # QW QX QY QZ X Y Z
+        known_poses = [cameras[key]['Q'] for key in keys]
+        known_poses = np.stack(known_poses, axis=0)
+        pprint(known_poses)
+
     if True:
         main_run()
+
+    if False:
+        resize_image()
 
     if False:
         pred1, pred2 = render_depth()
