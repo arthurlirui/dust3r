@@ -19,7 +19,7 @@ class PointCloudOptimizer(BasePCOptimizer):
     Graph edges: observations = (pred1, pred2)
     """
 
-    def __init__(self, *args, optimize_pp=False, focal_break=20, **kwargs):
+    def __init__(self, *args, optimize_pp=False, focal_break=20, use_rand_pose=True, **kwargs):
         super().__init__(*args, **kwargs)
 
         self.has_im_poses = True  # by definition of this class
