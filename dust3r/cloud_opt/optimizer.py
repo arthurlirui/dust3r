@@ -18,8 +18,7 @@ class PointCloudOptimizer(BasePCOptimizer):
     Graph node: images
     Graph edges: observations = (pred1, pred2)
     """
-
-    def __init__(self, *args, optimize_pp=False, focal_break=20, use_rand_pose=True, **kwargs):
+    def __init__(self, *args, optimize_pp=False, focal_break=20, init_poses=False, **kwargs):
         super().__init__(*args, **kwargs)
 
         self.has_im_poses = True  # by definition of this class
@@ -27,7 +26,12 @@ class PointCloudOptimizer(BasePCOptimizer):
 
         # adding thing to optimize
         self.im_depthmaps = nn.ParameterList(torch.randn(H, W)/10-3 for H, W in self.imshapes)  # log(depth)
-        self.im_poses = nn.ParameterList(self.rand_pose(self.POSE_DIM) for _ in range(self.n_imgs))  # camera poses
+        if init_poses:
+            #known_pose = kwargs['pose']
+            self.preset_pose(known_poses=kwargs['pose'])
+        else:
+            self.im_poses = nn.ParameterList(self.rand_pose(self.POSE_DIM) for _ in range(self.n_imgs))  # camera poses
+
         self.im_focals = nn.ParameterList(torch.FloatTensor(
             [self.focal_break*np.log(max(H, W))]) for H, W in self.imshapes)  # camera intrinsics
         self.im_pp = nn.ParameterList(torch.zeros((2,)) for _ in range(self.n_imgs))  # camera intrinsics
